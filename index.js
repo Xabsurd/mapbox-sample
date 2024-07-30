@@ -1,9 +1,15 @@
+//全部源代码请查看https://github.com/Xabsurd/mapbox-sample.git
 // TO MAKE THE MAP APPEAR YOU MUST
 // ADD YOUR ACCESS TOKEN FROM
 // https://account.mapbox.com
+//mapbox的token，请切换为自己的token
 mapboxgl.accessToken =
   "pk.eyJ1Ijoic2t5NTAwIiwiYSI6ImNsejd6MmYyZDBjbG8ybHM4enlucG1zbWgifQ.3w8qiGcZx0jLXPIb-ipVLA";
-
+//模型地址
+model_path =
+  "https://raw.githubusercontent.com/Xabsurd/mapbox-sample/main/assets/bicycle_low-poly_minimalistic/scene.gltf";
+//移动速度倍率
+const speed = 5;
 //数据来源：https://www.microsoft.com/en-us/download/details.aspx?id=52367
 const baseData = [
   [
@@ -355,12 +361,9 @@ async function init() {
 
         // use the three.js GLTF loader to add the 3D model to the three.js scene
         const loader = new THREE.GLTFLoader();
-        loader.load(
-          "./assets/bicycle_low-poly_minimalistic/scene.gltf",
-          (gltf) => {
-            this.scene.add(gltf.scene);
-          }
-        );
+        loader.load(model_path, (gltf) => {
+          this.scene.add(gltf.scene);
+        });
         this.map = map;
 
         // use the Mapbox GL JS map canvas for three.js
@@ -377,9 +380,8 @@ async function init() {
           baseTick = Date.now();
           firstRender = false;
         }
-        tick = Date.now() - baseTick;
+        tick = (Date.now() - baseTick) * speed;
         modelTransform = changeModelPosition();
-        console.log(modelTransform.rotateX);
         const rotationX = new THREE.Matrix4().makeRotationAxis(
           new THREE.Vector3(1, 0, 0),
           modelTransform.rotateX
@@ -430,22 +432,28 @@ async function init() {
     //如果记录的时间不在下一坐标点的时间范围内，就跳到下一个点
     if (tick >= nextPointTime - firstTime) {
       pointIndex++;
-      changeModelPosition();
-      return;
+      return changeModelPosition();
     } else {
       //计算时间百分比，用于计算于插值
       const percent =
         (tick - pointTime + firstTime) / (nextPointTime - pointTime);
 
       //计算旋转角度
-      const angle = getAngle(points[pointIndex], points[pointIndex + 1])+angleToRadian(90);
+      const angle =
+        Math.PI -
+        bearing(
+          points[pointIndex][0],
+          points[pointIndex][1],
+          points[pointIndex + 1][0],
+          points[pointIndex + 1][1]
+        );
 
       //计算模型位置，当前点到下一个点的按比例插值
       const modelOrigin = getPointByPercent(
         points[pointIndex],
         points[pointIndex + 1],
         percent
-      );;
+      );
       const modelAltitude = 0;
       const modelRotate = [Math.PI / 2, angle, 0];
       // 将经纬度转为墨卡托坐标
@@ -481,11 +489,32 @@ function angleToRadian(angle) {
 function radianToAngle(radian) {
   return (radian * 180) / Math.PI;
 }
-//计算A点到B点的夹角
-function getAngle(a, b) {
-  return Math.atan2(b[1] - a[1], b[0] - a[0]);
+/**
+ * 计算方位角
+ * @param {*} startLng 起始点经度
+ * @param {*} startLat 起始点纬度
+ * @param {*} destLng 目标点经度
+ * @param {*} destLat 目标点纬度
+ * @returns 
+ */
+function bearing(startLng, startLat, destLng, destLat) {
+  startLat = angleToRadian(startLat);
+  startLng = angleToRadian(startLng);
+  destLat = angleToRadian(destLat);
+  destLng = angleToRadian(destLng);
+
+  const y = Math.sin(destLng - startLng) * Math.cos(destLat);
+  const x =
+    Math.cos(startLat) * Math.sin(destLat) -
+    Math.sin(startLat) * Math.cos(destLat) * Math.cos(destLng - startLng);
+
+  let brng = Math.atan2(y, x);
+  if (brng < 0) {
+    brng = brng + 2 * Math.PI;
+  }
+  return brng;
 }
-//计算A点到B点之间指定比例的点,点为数组而不是x,y
+//计算A点到B点之间指定比例的点
 function getPointByPercent(a, b, percent) {
   return [a[0] + (b[0] - a[0]) * percent, a[1] + (b[1] - a[1]) * percent];
 }
