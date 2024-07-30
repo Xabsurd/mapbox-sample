@@ -278,18 +278,26 @@ const baseData = [
   ],
 ];
 init();
+
 async function init() {
   //   const response = await fetch("./output.json");
   //   const baseData = await response.json();
   //   console.log(baseData);
-  const map = new mapboxgl.Map({
-    container: "map", // container ID
-    center: [0, 0], // starting position [lng, lat]. Note that lat must be set between -90 and 90
-    zoom: 9, // starting zoom
-  });
   const points = baseData.map((point) => {
     return [parseFloat(point[1]), parseFloat(point[0])];
   });
+  const map = new mapboxgl.Map({
+    container: "map", // container ID
+    center: points[0], // starting position [lng, lat]. Note that lat must be set between -90 and 90
+    zoom: 20, // starting zoom
+  });
+  //时间戳
+  let tick = 0;
+  let firstRender = true;
+
+  let baseTick = 0;
+  let pointIndex = 0;
+  let firstTime = new Date(baseData[0][5] + " " + baseData[0][6]).getTime();
 
   map.on("load", () => {
     //添加路径
@@ -309,6 +317,7 @@ async function init() {
         ],
       },
     });
+    //添加路径到地图中并设置样式
     map.addLayer({
       id: "points",
       type: "line",
@@ -318,36 +327,15 @@ async function init() {
         "line-cap": "round",
       },
       paint: {
-        "line-color": "#888",
-        "line-width": 8,
+        "line-color": "#ceff00",
+        "line-width": 16,
       },
-    });
-    //移动镜头到路径位置
-    map.flyTo({
-      center: points[0],
-      zoom: 17,
     });
 
     map.addControl(new mapboxgl.NavigationControl());
-    //添加gltf模型到第一个点
     // 用于定位、旋转和缩放 3D 模型的变换参数
-    const modelOrigin = points[0];
-    const modelAltitude = 0;
-    const modelRotate = [Math.PI / 2, 0, 0];
-    const modelAsMercatorCoordinate = mapboxgl.MercatorCoordinate.fromLngLat(
-      modelOrigin,
-      modelAltitude
-    );
-    const modelTransform = {
-      translateX: modelAsMercatorCoordinate.x,
-      translateY: modelAsMercatorCoordinate.y,
-      translateZ: modelAsMercatorCoordinate.z,
-      rotateX: modelRotate[0],
-      rotateY: modelRotate[1],
-      rotateZ: modelRotate[2],
-      // 由于 3D 模型的单位是实际世界的米，需要应用缩放变换
-      scale: modelAsMercatorCoordinate.meterInMercatorCoordinateUnits(),
-    };
+    let modelTransform = null;
+    //使用官方示例中添加模型的方式
     const customLayer = {
       id: "3d-model",
       type: "custom",
@@ -356,7 +344,7 @@ async function init() {
         this.camera = new THREE.Camera();
         this.scene = new THREE.Scene();
 
-        // 创建两个 three.js 灯光以照亮模型
+        // create two three.js lights to illuminate the model
         const directionalLight = new THREE.DirectionalLight(0xffffff);
         directionalLight.position.set(0, -70, 100).normalize();
         this.scene.add(directionalLight);
@@ -365,7 +353,7 @@ async function init() {
         directionalLight2.position.set(0, 70, 100).normalize();
         this.scene.add(directionalLight2);
 
-        // 使用 three.js 的 GLTF 加载器将 3D 模型添加到场景中
+        // use the three.js GLTF loader to add the 3D model to the three.js scene
         const loader = new THREE.GLTFLoader();
         loader.load(
           "./assets/bicycle_low-poly_minimalistic/scene.gltf",
@@ -373,8 +361,131 @@ async function init() {
             this.scene.add(gltf.scene);
           }
         );
+        this.map = map;
+
+        // use the Mapbox GL JS map canvas for three.js
+        this.renderer = new THREE.WebGLRenderer({
+          canvas: map.getCanvas(),
+          context: gl,
+          antialias: true,
+        });
+
+        this.renderer.autoClear = false;
+      },
+      render: function (gl, matrix) {
+        if (firstRender) {
+          baseTick = Date.now();
+          firstRender = false;
+        }
+        tick = Date.now() - baseTick;
+        modelTransform = changeModelPosition();
+        console.log(modelTransform.rotateX);
+        const rotationX = new THREE.Matrix4().makeRotationAxis(
+          new THREE.Vector3(1, 0, 0),
+          modelTransform.rotateX
+        );
+        const rotationY = new THREE.Matrix4().makeRotationAxis(
+          new THREE.Vector3(0, 1, 0),
+          modelTransform.rotateY
+        );
+        const rotationZ = new THREE.Matrix4().makeRotationAxis(
+          new THREE.Vector3(0, 0, 1),
+          modelTransform.rotateZ
+        );
+        const m = new THREE.Matrix4().fromArray(matrix);
+        const l = new THREE.Matrix4()
+          .makeTranslation(
+            modelTransform.translateX,
+            modelTransform.translateY,
+            modelTransform.translateZ
+          )
+          .scale(
+            new THREE.Vector3(
+              modelTransform.scale,
+              -modelTransform.scale,
+              modelTransform.scale
+            )
+          )
+          .multiply(rotationX)
+          .multiply(rotationY)
+          .multiply(rotationZ);
+
+        this.camera.projectionMatrix = m.multiply(l);
+        this.renderer.resetState();
+        this.renderer.render(this.scene, this.camera);
+        this.map.triggerRepaint();
       },
     };
     map.addLayer(customLayer);
   });
+  const changeModelPosition = () => {
+    //当前点的时间
+    const pointTime = new Date(
+      baseData[pointIndex][5] + " " + baseData[pointIndex][6]
+    ).getTime();
+    //下一个点的时间
+    const nextPointTime = new Date(
+      baseData[pointIndex + 1][5] + " " + baseData[pointIndex + 1][6]
+    ).getTime();
+    //如果记录的时间不在下一坐标点的时间范围内，就跳到下一个点
+    if (tick >= nextPointTime - firstTime) {
+      pointIndex++;
+      changeModelPosition();
+      return;
+    } else {
+      //计算时间百分比，用于计算于插值
+      const percent =
+        (tick - pointTime + firstTime) / (nextPointTime - pointTime);
+
+      //计算旋转角度
+      const angle = getAngle(points[pointIndex], points[pointIndex + 1])+angleToRadian(90);
+
+      //计算模型位置，当前点到下一个点的按比例插值
+      const modelOrigin = getPointByPercent(
+        points[pointIndex],
+        points[pointIndex + 1],
+        percent
+      );;
+      const modelAltitude = 0;
+      const modelRotate = [Math.PI / 2, angle, 0];
+      // 将经纬度转为墨卡托坐标
+      const modelAsMercatorCoordinate = mapboxgl.MercatorCoordinate.fromLngLat(
+        modelOrigin,
+        modelAltitude
+      );
+      // 设置地图中心点
+      map.jumpTo({
+        center: modelOrigin,
+        zoom: 22,
+        pitch: 75,
+        bearing: 180 - radianToAngle(angle),
+      });
+      return {
+        translateX: modelAsMercatorCoordinate.x,
+        translateY: modelAsMercatorCoordinate.y,
+        translateZ: modelAsMercatorCoordinate.z,
+        rotateX: modelRotate[0],
+        rotateY: modelRotate[1],
+        rotateZ: modelRotate[2],
+        // 由于 3D 模型的单位是实际世界的米，需要应用缩放变换
+        scale: modelAsMercatorCoordinate.meterInMercatorCoordinateUnits(),
+      };
+    }
+  };
+}
+//角度转弧度
+function angleToRadian(angle) {
+  return (angle * Math.PI) / 180;
+}
+//弧度转角度
+function radianToAngle(radian) {
+  return (radian * 180) / Math.PI;
+}
+//计算A点到B点的夹角
+function getAngle(a, b) {
+  return Math.atan2(b[1] - a[1], b[0] - a[0]);
+}
+//计算A点到B点之间指定比例的点,点为数组而不是x,y
+function getPointByPercent(a, b, percent) {
+  return [a[0] + (b[0] - a[0]) * percent, a[1] + (b[1] - a[1]) * percent];
 }
